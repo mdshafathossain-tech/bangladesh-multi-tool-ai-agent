@@ -90,6 +90,38 @@ class SQLSafetyError(ValueError):
     """Raised when the LLM-generated SQL is not a safe, read-only query."""
 
 
+def _message_content_to_text(response: Any) -> str:
+    """
+    Normalize an LLM response's `.content` into a plain string.
+
+    Most chat models return `.content` as a plain string, but some
+    (including newer Gemini models, depending on response mode) return it
+    as a list of content blocks instead, e.g.
+    ``[{"type": "text", "text": "..."}]``. Calling `.strip()` directly on
+    that list raises `AttributeError: 'list' object has no attribute
+    'strip'` — this helper handles both shapes safely.
+    """
+    content = getattr(response, "content", None)
+    if content is None:
+        return str(response)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                # Common shape: {"type": "text", "text": "..."}
+                text = block.get("text")
+                if text:
+                    parts.append(text)
+        if parts:
+            return "".join(parts)
+        return str(content)
+    return str(content)
+
+
 def _extract_sql(raw_text: str) -> str:
     """Pull a bare SQL statement out of an LLM response.
 
@@ -351,7 +383,7 @@ class _BaseSQLiteQueryTool(BaseTool):
                 HumanMessage(content=user_prompt),
             ]
         )
-        raw_sql = response.content if hasattr(response, "content") else str(response)
+        raw_sql = _message_content_to_text(response)
         return _extract_sql(raw_sql)
 
     def _summarize_results(self, question: str, sql: str, col_names: list[str],
@@ -369,7 +401,7 @@ class _BaseSQLiteQueryTool(BaseTool):
                 HumanMessage(content=user_prompt),
             ]
         )
-        answer = response.content if hasattr(response, "content") else str(response)
+        answer = _message_content_to_text(response)
         return answer.strip()
 
     def _run(self, question: str, **kwargs: Any) -> str:
