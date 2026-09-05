@@ -2,8 +2,6 @@
 
 # 🇧🇩 Bangladesh Multi-Tool AI Agent
 
-**একটি স্মার্ট রিসার্চ এসিস্ট্যান্ট যা স্বয়ংক্রিয়ভাবে জানে কখন ডাটাবেইজ খুঁজবে, আর কখন ওয়েবে সার্চ করবে**
-
 *An LLM agent that automatically routes Bangladesh-related questions to the right tool — structured SQLite databases or live web search — and shows you exactly which one it picked.*
 
 ![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)
