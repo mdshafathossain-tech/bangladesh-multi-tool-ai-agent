@@ -216,9 +216,9 @@ def build_agent():
         temperature=0,
     )
 
-    institutions_tool = InstitutionsDBTool(llm=llm, db_path=INSTITUTIONS_DB_PATH)
-    hospitals_tool = HospitalsDBTool(llm=llm, db_path=HOSPITALS_DB_PATH)
-    restaurants_tool = RestaurantsDBTool(llm=llm, db_path=RESTAURANTS_DB_PATH)
+    institutions_tool = InstitutionsDBTool(llm=llm, db_path=INSTITUTIONS_DB_PATH, skip_llm_summary=True)
+    hospitals_tool = HospitalsDBTool(llm=llm, db_path=HOSPITALS_DB_PATH, skip_llm_summary=True)
+    restaurants_tool = RestaurantsDBTool(llm=llm, db_path=RESTAURANTS_DB_PATH, skip_llm_summary=True)
     web_search_tool = TavilySearch(max_results=TAVILY_MAX_RESULTS)
 
     tools = [institutions_tool, hospitals_tool, restaurants_tool, web_search_tool]
@@ -324,15 +324,22 @@ def main() -> None:
             print("Goodbye!")
             break
 
+        agent_error = False
         try:
             result = agent.invoke({"messages": [HumanMessage(content=user_input)]})
             tool_names = _extract_tool_names(result)
             answer = _extract_final_answer(result)
         except Exception as exc:  # noqa: BLE001 - keep the CLI alive on any error
+            agent_error = True
             tool_names = []
             answer = f"(An error occurred while answering: {exc})"
 
-        routing_label = _format_routing_label(tool_names)
+        # Distinguish "the model genuinely answered without a tool" from
+        # "a tool call never completed because the request itself failed"
+        # (e.g. a quota/rate-limit error) — both look like an empty
+        # tool_names list, but they mean very different things to the user.
+        routing_label = "⚠️ Error (request failed before routing completed)" if agent_error \
+            else _format_routing_label(tool_names)
         print(f"[Routing Info] Tool Selected: {routing_label}")
         print("-" * 50)
         print(f"Agent: {answer}")

@@ -290,6 +290,7 @@ class _BaseSQLiteQueryTool(BaseTool):
     db_path: str = ""
     row_limit: int = 200
     return_sql: bool = False
+    skip_llm_summary: bool = False
 
     def __init__(
         self,
@@ -297,6 +298,7 @@ class _BaseSQLiteQueryTool(BaseTool):
         db_path: str,
         row_limit: int = 200,
         return_sql: bool = False,
+        skip_llm_summary: bool = False,
         **kwargs: Any,
     ) -> None:
         """
@@ -313,9 +315,22 @@ class _BaseSQLiteQueryTool(BaseTool):
         return_sql:
             If True, prefix the natural-language answer with the SQL query
             that was executed (useful for debugging/transparency).
+        skip_llm_summary:
+            If True, skip the second LLM call that turns raw SQL rows into
+            natural-language prose, and instead return a plain formatted
+            dump of the query result. This HALVES the number of LLM calls
+            this tool makes per invocation (1 instead of 2) — useful when
+            running under a tight request-per-day quota (e.g. a Gemini free
+            tier). Safe to enable when this tool is used inside an agent
+            (like main.py's create_agent), because the agent's own
+            follow-up turn already turns the tool's output into a natural-
+            language answer for the user — the tool's own summarization
+            step is then redundant. Leave False (default) if you call this
+            tool standalone and want it to always return finished prose.
         """
         super().__init__(llm=llm, db_path=db_path, row_limit=row_limit,
-                          return_sql=return_sql, **kwargs)
+                          return_sql=return_sql, skip_llm_summary=skip_llm_summary,
+                          **kwargs)
 
     # -- core pipeline ----------------------------------------------------- #
 
@@ -375,7 +390,16 @@ class _BaseSQLiteQueryTool(BaseTool):
             )
 
         try:
-            answer = self._summarize_results(question, sql, col_names, rows)
+            if self.skip_llm_summary:
+                # No second LLM call — return a plain, readable dump of the
+                # result. The calling agent's own next turn will phrase this
+                # into natural language for the user.
+                answer = (
+                    f"Query result for \"{question}\":\n"
+                    f"{_format_rows_for_prompt(col_names, rows)}"
+                )
+            else:
+                answer = self._summarize_results(question, sql, col_names, rows)
         except Exception as exc:  # noqa: BLE001
             # Fall back to a raw dump of results if summarization fails.
             answer = (

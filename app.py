@@ -38,6 +38,8 @@ HOW TO RUN
 
 from __future__ import annotations
 
+import time
+
 import streamlit as st
 from langchain_core.messages import HumanMessage
 
@@ -50,7 +52,7 @@ from main import (
 
 
 # --------------------------------------------------------------------------- #
-# Page config & header
+# Page config
 # --------------------------------------------------------------------------- #
 
 st.set_page_config(
@@ -59,11 +61,86 @@ st.set_page_config(
     layout="centered",
 )
 
-st.title("🇧🇩 Bangladesh Multi-Tool AI Agent")
-st.caption(
-    "Ask about **Institutions** 🏫 · **Hospitals** 🏥 · **Restaurants** 🍽️ · "
-    "or general **Web Search** 🌐 — the agent automatically routes your "
-    "question to the right tool."
+USER_AVATAR = "🧑‍💻"
+ASSISTANT_AVATAR = "🇧🇩"
+
+EXAMPLE_QUESTIONS = [
+    "How many restaurants are in the database?",
+    "Which restaurant has the highest rating?",
+    "What is the role of DGHS in Bangladesh?",
+]
+
+
+# --------------------------------------------------------------------------- #
+# Custom styling
+# --------------------------------------------------------------------------- #
+
+st.markdown(
+    """
+    <style>
+    .stApp {
+        background: linear-gradient(180deg, #f7fdf9 0%, #ffffff 40%);
+    }
+    .bd-header {
+        background: linear-gradient(90deg, #006a4e 0%, #00875a 100%);
+        padding: 1.4rem 1.6rem;
+        border-radius: 14px;
+        margin-bottom: 1.2rem;
+        box-shadow: 0 4px 14px rgba(0, 106, 78, 0.25);
+    }
+    .bd-header h1 {
+        color: white;
+        margin: 0;
+        font-size: 1.6rem;
+    }
+    .bd-header p {
+        color: #eafff3;
+        margin: 0.35rem 0 0 0;
+        font-size: 0.95rem;
+    }
+    .bd-tool-chip {
+        display: inline-block;
+        background: #ffffff;
+        border: 1px solid #d7ecdf;
+        border-radius: 999px;
+        padding: 0.2rem 0.7rem;
+        margin: 0.15rem 0.25rem 0.15rem 0;
+        font-size: 0.8rem;
+        color: #0a5c3e;
+    }
+    div[data-testid="stChatMessage"] {
+        border-radius: 14px;
+        padding: 0.25rem 0.4rem;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# --------------------------------------------------------------------------- #
+# Header
+# --------------------------------------------------------------------------- #
+
+st.markdown(
+    """
+    <div class="bd-header">
+        <h1>🇧🇩 Bangladesh Multi-Tool AI Agent</h1>
+        <p>Ask about institutions, hospitals, restaurants, or anything else — the agent
+        automatically routes your question to the right tool.</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    """
+    <span class="bd-tool-chip">🏫 Institutions</span>
+    <span class="bd-tool-chip">🏥 Hospitals</span>
+    <span class="bd-tool-chip">🍽️ Restaurants</span>
+    <span class="bd-tool-chip">🌐 Web Search</span>
+    """,
+    unsafe_allow_html=True,
 )
 
 
@@ -106,8 +183,35 @@ except Exception as exc:  # noqa: BLE001 - surface any other startup error clear
 # --------------------------------------------------------------------------- #
 
 if "messages" not in st.session_state:
-    # Each entry: {"role": "user" | "assistant", "content": str, "routing": str | None}
+    # Each entry: {"role": "user"|"assistant", "content": str, "routing": str|None}
     st.session_state.messages = []
+
+if "pending_question" not in st.session_state:
+    st.session_state.pending_question = None
+
+
+# --------------------------------------------------------------------------- #
+# Sidebar — quick actions & example questions (dynamic elements)
+# --------------------------------------------------------------------------- #
+
+with st.sidebar:
+    st.subheader("⚡ Quick questions")
+    st.caption("Click one to ask it instantly.")
+    for q in EXAMPLE_QUESTIONS:
+        if st.button(q, use_container_width=True):
+            st.session_state.pending_question = q
+
+    st.divider()
+    if st.button("🗑️ Clear conversation", use_container_width=True):
+        st.session_state.messages = []
+        st.rerun()
+
+    st.divider()
+    st.caption(
+        "💡 Tip: general/background questions (routed to Web Search) use "
+        "fewer Gemini calls than database questions, so they're gentler on "
+        "a free-tier daily quota."
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -115,40 +219,69 @@ if "messages" not in st.session_state:
 # --------------------------------------------------------------------------- #
 
 for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
+    avatar = USER_AVATAR if message["role"] == "user" else ASSISTANT_AVATAR
+    with st.chat_message(message["role"], avatar=avatar):
         if message["role"] == "assistant" and message.get("routing"):
             st.info(f"🔍 [Routing Info] Tool Selected: {message['routing']}")
         st.markdown(message["content"])
 
 
 # --------------------------------------------------------------------------- #
-# Chat input & response handling
+# Helper: turn a finished answer into a light "typing" stream for st.write_stream
 # --------------------------------------------------------------------------- #
 
-user_input = st.chat_input("Ask a question about Bangladesh institutions, hospitals, restaurants, or anything else...")
+def _stream_text(text: str):
+    for word in text.split(" "):
+        yield word + " "
+        time.sleep(0.015)
 
-if user_input:
-    # 1. Store and display the user's message.
+
+def _handle_question(user_input: str) -> None:
     st.session_state.messages.append({"role": "user", "content": user_input, "routing": None})
-    with st.chat_message("user"):
+    with st.chat_message("user", avatar=USER_AVATAR):
         st.markdown(user_input)
 
-    # 2. Invoke the agent and render the assistant's response.
-    with st.chat_message("assistant"):
+    with st.chat_message("assistant", avatar=ASSISTANT_AVATAR):
+        agent_error = False
         with st.spinner("Thinking..."):
             try:
                 result = agent.invoke({"messages": [HumanMessage(content=user_input)]})
                 tool_names = _extract_tool_names(result)
                 answer = _extract_final_answer(result)
             except Exception as exc:  # noqa: BLE001 - keep the app alive on any error
+                agent_error = True
                 tool_names = []
                 answer = f"An error occurred while answering: {exc}"
 
-        routing_label = _format_routing_label(tool_names)
+        # Distinguish "the model genuinely answered without a tool" from
+        # "a tool call never completed because the request itself failed"
+        # (e.g. a quota/rate-limit error) — both look like an empty
+        # tool_names list, but they mean very different things to the user.
+        routing_label = (
+            "⚠️ Error (request failed before routing completed)"
+            if agent_error else _format_routing_label(tool_names)
+        )
         st.info(f"🔍 [Routing Info] Tool Selected: {routing_label}")
-        st.markdown(answer)
+        st.write_stream(_stream_text(answer))
 
-    # 3. Persist the assistant's message (with its routing label) for future reruns.
     st.session_state.messages.append(
         {"role": "assistant", "content": answer, "routing": routing_label}
     )
+
+
+# --------------------------------------------------------------------------- #
+# Chat input & response handling
+# --------------------------------------------------------------------------- #
+
+# A sidebar button sets this; handle it before the manual chat_input so a
+# click behaves just like typing the same question.
+if st.session_state.pending_question:
+    pending = st.session_state.pending_question
+    st.session_state.pending_question = None
+    _handle_question(pending)
+
+user_input = st.chat_input(
+    "Ask a question about Bangladesh institutions, hospitals, restaurants, or anything else..."
+)
+if user_input:
+    _handle_question(user_input)
