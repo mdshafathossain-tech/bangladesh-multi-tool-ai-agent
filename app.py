@@ -207,6 +207,20 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
+    st.toggle(
+        "🧪 Mock Mode (no Gemini/Tavily calls)",
+        key="mock_mode",
+        help=(
+            "Turn this on to test the chat UI, routing banner, and styling "
+            "with instant scripted answers — useful when your Gemini free-tier "
+            "daily quota (20 requests/day) is exhausted. Turn it off to get "
+            "real answers again."
+        ),
+    )
+    if st.session_state.get("mock_mode"):
+        st.caption("🧪 Mock Mode is ON — answers below are scripted, not real.")
+
+    st.divider()
     st.caption(
         "💡 Tip: general/background questions (routed to Web Search) use "
         "fewer Gemini calls than database questions, so they're gentler on "
@@ -236,6 +250,45 @@ def _stream_text(text: str):
         time.sleep(0.015)
 
 
+# --------------------------------------------------------------------------- #
+# Mock mode — scripted, zero-API-call responses for UI/UX testing only.
+# Makes ZERO network calls, so it never touches your Gemini/Tavily quota.
+# --------------------------------------------------------------------------- #
+
+def _mock_invoke(question: str) -> dict:
+    from langchain_core.messages import AIMessage
+
+    q = question.lower()
+    if "restaurant" in q or "cuisine" in q or "rating" in q:
+        tool, answer = "restaurants_db_tool", (
+            "(Mock) The highest-rated restaurant in the sample data is "
+            "'Sultan's Dine' with a rating of 4.8."
+        )
+    elif "hospital" in q or "bed" in q or "doctor" in q:
+        tool, answer = "hospitals_db_tool", (
+            "(Mock) There are 128 hospitals in the database matching that "
+            "description."
+        )
+    elif "university" in q or "college" in q or "institut" in q or "school" in q:
+        tool, answer = "institutions_db_tool", (
+            "(Mock) There are 42 government institutions matching that "
+            "description."
+        )
+    elif any(kw in q for kw in ("dghs", "policy", "role of", "what is", "history", "news")):
+        tool, answer = "tavily_search", (
+            "(Mock) This would normally be answered via a live web search — "
+            "no real search was performed in Mock Mode."
+        )
+    else:
+        tool, answer = None, "(Mock) This is a scripted demo answer for UI testing."
+
+    messages = []
+    if tool:
+        messages.append(AIMessage(content="", tool_calls=[{"name": tool, "args": {"question": question}, "id": "mock-1"}]))
+    messages.append(AIMessage(content=answer))
+    return {"messages": messages}
+
+
 def _handle_question(user_input: str) -> None:
     st.session_state.messages.append({"role": "user", "content": user_input, "routing": None})
     with st.chat_message("user", avatar=USER_AVATAR):
@@ -245,7 +298,10 @@ def _handle_question(user_input: str) -> None:
         agent_error = False
         with st.spinner("Thinking..."):
             try:
-                result = agent.invoke({"messages": [HumanMessage(content=user_input)]})
+                if st.session_state.get("mock_mode"):
+                    result = _mock_invoke(user_input)
+                else:
+                    result = agent.invoke({"messages": [HumanMessage(content=user_input)]})
                 tool_names = _extract_tool_names(result)
                 answer = _extract_final_answer(result)
             except Exception as exc:  # noqa: BLE001 - keep the app alive on any error
